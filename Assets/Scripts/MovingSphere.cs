@@ -34,6 +34,9 @@ public class MovingSphere : MonoBehaviour
     float probeDistance = 1f;
     [SerializeField]
     LayerMask probeMask = -1, stairsMask = -1;
+    [SerializeField]
+    Transform playerInputSpace = default; // Make player movement relative to camera. 
+    Vector3 upAxis;
 
     private void OnValidate()
     {
@@ -57,8 +60,27 @@ public class MovingSphere : MonoBehaviour
         playerInput = Vector2.ClampMagnitude(playerInput, 1f);
         // We're teleporting isntead of moving you need a displacement vector to dictate new position so we create an infinite iterative
         // sequence to Pn+1 = pn + d with p0 as start
-        desiredVelocity =
-            new Vector3(playerInput.x, 0f, playerInput.y) * maxSpeed;
+        if (playerInputSpace) // If input space is assigned, we convert provided space to world space. Otherwise use world space.
+        {   
+            //Normalized Direction. Forward speed affected by the vertical orbit angle. Thus deviates from horizontal the slower the
+            // sphere moves. That happens because we expected the desired velocity to lie in XZ plane. We can make it so by
+            // retrieving forward and right vector from the player input space. Discard y, normalize. Then desired vvelocity becomes sum
+            // of vectors scaled by player movement.
+            Vector3 forward = playerInputSpace.forward;
+            forward.y = 0f;
+            forward.Normalize();
+            Vector3 right = playerInputSpace.right;
+            right.y = 0f;
+            right.Normalize();
+            desiredVelocity =
+                (forward * playerInput.y + right * playerInput.x) * maxSpeed;
+        }
+        else
+        {
+            desiredVelocity =
+                new Vector3(playerInput.x, 0f, playerInput.y) * maxSpeed;
+        }
+        
         desiredJump |= Input.GetButtonDown("Jump");
         GetComponent<Renderer>().material.SetColor(
             "_Color", Color.white * (groundContactCount * 0.25f));
@@ -68,6 +90,7 @@ public class MovingSphere : MonoBehaviour
     }
     private void FixedUpdate()
     {
+        upAxis = -Physics.gravity.normalized;
         //velocity = body.velocity;
         UpdateState();
         AdjustVelocity();
@@ -160,7 +183,7 @@ public class MovingSphere : MonoBehaviour
         }
         else
         {
-            contactNormal = Vector3.up;
+            contactNormal = upAxis;
         }
     }
    
@@ -183,13 +206,14 @@ public class MovingSphere : MonoBehaviour
         for(int i = 0; i < collision.contactCount; i++)
         {
             Vector3 normal = collision.GetContact(i).normal;
+            float upDot = Vector3.Dot(upAxis, normal);
             //onGround |= normal.y >= minGroundDotProduct;
             if (normal.y >= minDot)
             {
                 groundContactCount += 1;
                 contactNormal += normal;
             }
-            else if (normal.y > -0.01f)
+            else if (upDot > -0.01f)
             {
                 steepContactCount += 1;
                 steepNormal += normal;
@@ -223,8 +247,8 @@ public class MovingSphere : MonoBehaviour
         //if (OnGround || jumpPhase < maxAirJumps)
         stepsSinceLastJump = 0;
         jumpPhase += 1;
-        float jumpSpeed = Mathf.Sqrt(-2f * Physics.gravity.y * jumpHeight);
-        jumpDirection = (jumpDirection + Vector3.up).normalized;
+        float jumpSpeed = Mathf.Sqrt(2f * Physics.gravity.magnitude * jumpHeight);
+        jumpDirection = (jumpDirection + upAxis).normalized;
         float alignedSpeed = Vector3.Dot(velocity, jumpDirection);
         if (alignedSpeed > 0f)
         {
@@ -262,11 +286,12 @@ public class MovingSphere : MonoBehaviour
         {
             return false;
         }
-        if (!Physics.Raycast(body.position, Vector3.down, out RaycastHit hit, probeDistance, probeMask))
+        if (!Physics.Raycast(body.position, -upAxis, out RaycastHit hit, probeDistance, probeMask))
         {
             return false;
         }
-        if (hit.normal.y < GetMinDot(hit.collider.gameObject.layer))
+        float upDot = Vector3.Dot(upAxis, hit.normal);
+        if (upDot < GetMinDot(hit.collider.gameObject.layer))
         {
             return false;
         }
@@ -288,7 +313,8 @@ public class MovingSphere : MonoBehaviour
         if(steepContactCount > 1)
         {
             steepNormal.Normalize();
-            if (steepNormal.y >= minGroundDotProduct)
+            float upDot = Vector3.Dot(upAxis, steepNormal);
+            if (upDot >= minGroundDotProduct)
             {
                 groundContactCount = 1;
                 contactNormal = steepNormal;
